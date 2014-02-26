@@ -1,7 +1,6 @@
-
 /**!
  * @license CSSResizer.js v0.7
- * (c) 2013 Giuseppe Scotto Lavina <mailto:g.scotto@email.it>
+ * (c) 2014 Giuseppe Scotto Lavina <mailto:g.scotto@email.it>
  * Available under MIT license
  */
 
