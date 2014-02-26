@@ -1,48 +1,94 @@
+
 /**!
- * @license CSSResizer.js v0.7
+ * @license CSSResizer.js v2.3
  * (c) 2014 Giuseppe Scotto Lavina <mailto:g.scotto@email.it>
  * Available under MIT license
  */
 
 
 ;(function(
-  win, selectorStr, cssRulesStr, rulesStr, styleStr,
-  mediaStr, nameStr, nullStr, bs, nillStr, TRUE, FALSE,
-  NULL, mt, styleSheets, camelReg
+  win, selectorStr, cssRulesStr, rulesStr, urlStr,
+  styleStr, mediaStr, nameStr, nullStr, bs, nillStr,
+  TRUE, FALSE, NULL, camelReg, doc, styleSheets
 ) {
 
   "use strict"
 
-  var parseVal = (function(
-    ret, v, o, c, i
+  var camelize = (function(cache, fn) {
+    return function camelize(str) {
+      str in cache || (cache[str] = str.replace(camelReg, fn))
+      return cache[str]
+    }
+  })({}, function replaceMatch(match, chr) {
+    return chr ? chr.toUpperCase() : nillStr
+  }),
+
+  parseVal = (function(
+    v, o, c
   ) {
+    var
+      ret = {},
+      idx = 0
+
     return function parseVal(val) {
-      if((i = val.indexOf(o)) >= 0) {
-        ret.pre = val.substr(0, i + 1)
-        ret.val = val.substr(i + 1)
+      if((idx = val.indexOf(o)) >= 0) {
+        ret.pre = val.substr(0, idx + 1)
+        ret.val = val.substr(idx + 1)
       } else {
         ret.pre = nillStr
         ret.val = val
       }
-      if((i = ret.val.indexOf(v)) >= 0 ||
-         (i = ret.val.indexOf(c)) >= 0) {
-        ret.post = ret.val.substr(i)
-        ret.val  = ret.val.substr(0, i)
+      if((idx = ret.val.indexOf(c)) >= 0 ||
+         (idx = ret.val.indexOf(v)) >= 0) {
+        ret.post = ret.val.substr(idx)
+        ret.val  = ret.val.substr(0, idx)
       } else
         ret.post = nillStr
 
       return ret
     }
-  })({}, ",", "(", ")", 0),
+  })(",", "(", ")"),
 
-  camelize = (function(fn) {
-    return function(str) {
-      return str.replace(camelReg, fn)
+  scaleImg = (function(can) {
+    var ctx = can.getContext("2d")
+
+    return function scaleImg(val, ratio, idx, fn) {
+      var
+        img  = new Image(),
+        url  = val.val,
+        pre  = val.pre,
+        post = val.post
+
+      img.onload = function() {
+        var
+          width  = round(this.width  * ratio, 0),
+          height = round(this.height * ratio, 0)
+
+        can.width  = width
+        can.height = height
+        ctx.drawImage(this, 0, 0, width, height)
+        fn(pre + can.toDataURL() + post, idx)
+        this.onerror =
+        this.onabort =
+        this.onload  =
+        img = null
+      }
+      img.onerror = img.onabort = function() {
+        console.warn(url + " is unreachable!")
+        fn(pre + url + post, idx)
+        this.onerror =
+        this.onabort =
+        this.onload  =
+        img = null
+      }
+      img.src = url
     }
-  })(function(match, chr) {
-    return chr ? chr.toUpperCase() : nillStr
-  })
+  })(doc.createElement("canvas"))
 
+  function round(val, dec) {
+    var _dec = dec ? 10 * dec : 1
+    return ((0.5 + val * _dec) ^ 0) / _dec
+  }
 
   function CSSResizer(options) {
     return this.init(options)
@@ -50,20 +96,34 @@
 
   CSSResizer.prototype = {
 
-    _scaleValue: function(values, ratio) {
+    _scaleValue: function(style, cprop, value, ratio, fn) {
       var
         vVal  = NULL,
         pVal  = nillStr,
         sVal  = nillStr,
         unit  = nillStr,
         units = this.options.units,
-        aVal  = values.split(bs),
+        aVal  = value.split(bs),
         idxV  = aVal.length,
         idxU  = 0,
         idxF  = 0,
-        iVal  = 0
+        iVal  = 0,
+        imgs  = 0
 
       for(; idxV-- && (vVal = parseVal(aVal[idxV])) && (pVal = vVal.val);)
+        if(this.options.scaleImages && vVal.pre.indexOf(urlStr) >= 0) {
+          if(ratio) {
+            imgs++
+            scaleImg(vVal, ratio, idxV, function(data, idx) {
+              aVal[idx] = data
+              if(!--imgs) {
+                style[cprop] = aVal.join(bs)
+                fn()
+              }
+            })
+          } else
+            return TRUE
+        } else
         for(idxU = units.length; idxU-- && (unit = units[idxU]);)
           if(
             (idxF = pVal.indexOf(unit)) > 0      &&
@@ -73,49 +133,55 @@
           ) {
             if(ratio)
               aVal[idxV] = vVal.pre +
-                           (mt.round(iVal * ratio * 10) / 10) + unit +
+                           round(iVal * ratio, 1) + unit +
                            vVal.post
             else
-              return FALSE
+              return TRUE
           }
 
-      return aVal.join(bs)
+      if(!imgs && ratio) {
+        style[cprop] = aVal.join(bs)
+        fn()
+      }
+
+      return FALSE
     },
 
     _parseRule: function(cssRule, selector) {
       var
-        skip      = TRUE,
         styles    = NULL,
-        propCheck = nillStr,
-        property  = nillStr,
         value     = nillStr,
+        cprop     = nillStr,
+        prop      = nillStr,
         idxS      = 0,
         idxP      = 0
 
-      if(!(selector in this.stylesCache)) this.stylesCache[selector] = []
+      if(!(selector in this.stylesCache))
+        this.stylesCache[selector] = []
       if(styleStr in cssRule && (styles = cssRule.style) && styles.length) {
         this.stylesCache[selector].push(styles)
-        for(idxS = styles.length; idxS--;) {
-          skip     = TRUE
-          property = styles[idxS]
-          value    = styles[camelize(property)]
+        for(idxS = styles.length; idxS-- && (prop = styles[idxS]);)
           for(idxP = this.options.properties.length; idxP--;)
-            if(property.indexOf(this.options.properties[idxP]) >= 0)
-              if((skip = this._scaleValue(value)) === FALSE) break
-          if(skip === FALSE) {
-            if(!(selector in this.propertiesCache))
-              this.propertiesCache[selector] = {}
-            if(!(property in this.propertiesCache[selector]))
-              this.propertiesCache[selector][property] = []
-            this.propertiesCache[selector][property].push(value)
-          }
-        }
+            if(
+              prop.indexOf(this.options.properties[idxP]) >= 0 &&
+              (value = styles[(cprop = camelize(prop))])       &&
+              this._scaleValue(styles, cprop, value)
+            ) {
+              if(!(selector in this.propsCache))
+                this.propsCache[selector] = {}
+              if(!(prop in this.propsCache[selector])) {
+                this.propsCache[selector][prop] = []
+                this.props2scale++
+              }
+              this.propsCache[selector][prop].push(value)
+              break
+            }
       }
     },
 
     init: function(options) {
       var
-        opt        = nillStr,
+        option     = nillStr,
         styleSheet = NULL,
         cssRules   = NULL,
         cssRule    = NULL,
@@ -126,8 +192,8 @@
         idxS       = 0
 
       this.destroy()
-      for(opt in this.defaults) this.options[opt] = this.defaults[opt]
-      for(opt in options) this.options[opt] = options[opt]
+      for(option in this.defaults) this.options[option] = this.defaults[option]
+      for(option in options) this.options[option] = options[option]
       for(idxSt = styleSheets.length; idxSt--;) {
         styleSheet = styleSheets[idxSt]
         cssRulesStr in styleSheet && styleSheet.cssRules && (cssRules = styleSheet.cssRules)
@@ -156,52 +222,69 @@
     },
 
     destroy: function() {
-      this.options         = {}
-      this.stylesCache     = {}
-      this.propertiesCache = {}
+      this.options     = {}
+      this.propsCache  = {}
+      this.stylesCache = {}
+      this.props2scale = 0
     },
 
-    scale: function(ratio) {
+    scale: function(ratio, fn) {
       var
+        count    = this.props2scale,
         selector = nillStr,
         cssText  = nillStr,
         prop     = nillStr,
+        style    = NULL,
         props    = NULL
 
-      for(selector in this.propertiesCache) {
-      	cssText = nillStr
-        props = this.propertiesCache[selector]
+      for(selector in this.propsCache) {
+        props = this.propsCache[selector]
+        style = this.stylesCache[selector][0]
         for(prop in props)
-          cssText += prop + ":" + this._scaleValue(props[prop][0], ratio) + ";"
-        this.stylesCache[selector][0].cssText += cssText
+          this._scaleValue(
+            style,
+            camelize(prop),
+            props[prop][0],
+            ratio,
+            function() {
+              !--count && fn && fn()
+            }
+          )
       }
     },
 
     getStyle: function() {
       var
-        formatted = nillStr,
         selector  = nillStr,
         prop      = nillStr,
-        out       = nillStr,
+        buff      = nillStr,
+        pre       = NULL,
         style     = NULL,
         props     = NULL
 
-      for(selector in this.propertiesCache) {
-        props = this.propertiesCache[selector]
+      this.cssWin && this.cssWin.close()
+      this.cssWin = win.open(nillStr, nillStr, "width=800,height=600")
+      this.cssWin.document.title = "style.css"
+      pre = doc.createElement("pre")
+      for(selector in this.propsCache) {
+        props = this.propsCache[selector]
         style = this.stylesCache[selector]
-        if(!style.length) console.warn(selector, style)
+        if(!style.length)
+          console.warn(selector, style)
         else {
-          out += "\n" + selector + " {\n"
-          for(prop in props) out += "  " + prop + ": " + style[0][prop] + ";\n"
-          out += "}\n"
+          buff = "\n" + selector + " {\n"
+          for(prop in props) buff += "  " + prop + ": " + style[0][prop] + ";\n"
+          buff += "}\n"
+          pre.appendChild(doc.createTextNode(buff))
         }
       }
-      return out
+      this.cssWin.document.body.appendChild(pre)
     }
   }
 
   CSSResizer.prototype.defaults = {
-    matchMedia: FALSE,
+    matchMedia:  FALSE,
+    scaleImages: TRUE,
     properties: [
       "top", "bottom", "left", "right", "width", "height",
       "size", "transform", "position", "shadow", "spacing",
@@ -213,8 +296,10 @@
   win.CSSResizer = CSSResizer
 
 })(
-  this, "selectorText", "cssRules", "rules",
+  this,
+  "selectorText", "cssRules", "rules", "url(",
   "style", "media", "name", "null", " ", "",
-  true, false, null, Math, document.styleSheets,
-  /-+(.)?/g
+  true, false, null, /-+(.)?/g, document,
+  document.styleSheets
 )
+
